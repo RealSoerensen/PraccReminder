@@ -38,6 +38,7 @@ async def on_ready():
     print(f"Logged in as {bot.user}")
 
 
+@bot.command()
 async def remind():
     await bot.wait_until_ready()
     ctx = bot.get_channel(655128550030049323)
