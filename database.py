@@ -22,6 +22,13 @@ def get_db_connection():
 def init_db() -> None:
     """Initialize the SQLite database and create tables if they don't exist."""
     logger.info(f"Initializing database: {DB_FILE}")
+    # Create db if not exists
+    try:
+        open(DB_FILE, 'a').close()
+    except Exception as e:
+        logger.error(f"Error creating database file: {e}", exc_info=True)
+        raise
+    
     try:
         with get_db_connection() as conn:
             cursor = conn.cursor()
