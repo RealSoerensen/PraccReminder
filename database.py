@@ -7,8 +7,8 @@ import os
 # Setup logging
 logger = logging.getLogger(__name__)
 
-# Use absolute path for database file
-DB_DIR = os.path.dirname(os.path.abspath(__file__))
+# Use /app/data directory for database (mounted as volume)
+DB_DIR = os.environ.get("DB_DIR", "/app/data")
 DB_FILE = os.path.join(DB_DIR, "reminder.db")
 
 

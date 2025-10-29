@@ -10,9 +10,12 @@ services:
             - .env
         volumes:
             - ./auth.json:/app/auth.json:ro
-            - ./reminder.db:/app/reminder.db
+            - bot-data:/app/data
         logging:
             driver: "json-file"
             options:
                 max-size: "10m"
                 max-file: "3"
+
+volumes:
+    bot-data:
