@@ -30,7 +30,8 @@ jobs:
             - name: Build Docker image
               run: |
                   SHORT_SHA=${GITHUB_SHA::8}
-                  IMAGE=ghcr.io/${{ github.repository_owner }}/praccreminder:sha-${SHORT_SHA}
+                  REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+                  IMAGE=ghcr.io/${REPO_OWNER}/praccreminder:sha-${SHORT_SHA}
                   echo "Building Docker image $IMAGE"
                   docker build -t $IMAGE .
 
@@ -44,13 +45,14 @@ jobs:
             - name: Push image to GHCR
               run: |
                   SHORT_SHA=${GITHUB_SHA::8}
-                  IMAGE=ghcr.io/${{ github.repository_owner }}/praccreminder:sha-${SHORT_SHA}
+                  REPO_OWNER=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+                  IMAGE=ghcr.io/${REPO_OWNER}/praccreminder:sha-${SHORT_SHA}
                   echo "Pushing Docker image $IMAGE"
                   docker push $IMAGE
 
                   # Also tag as latest
-                  docker tag $IMAGE ghcr.io/${{ github.repository_owner }}/praccreminder:latest
-                  docker push ghcr.io/${{ github.repository_owner }}/praccreminder:latest
+                  docker tag $IMAGE ghcr.io/${REPO_OWNER}/praccreminder:latest
+                  docker push ghcr.io/${REPO_OWNER}/praccreminder:latest
 
             - name: Deploy to VPS (update compose & restart bot)
               uses: appleboy/ssh-action@v0.1.7
@@ -58,15 +60,16 @@ jobs:
                   host: ${{ secrets.DEPLOY_HOST }}
                   username: ${{ secrets.DEPLOY_USER }}
                   key: ${{ secrets.DEPLOY_SSH_KEY }}
-                  envs: GITHUB_SHA_REMOTE
+                  envs: GITHUB_SHA_REMOTE,GITHUB_REPOSITORY_OWNER
                   script: |
                       set -e
                       SHORT_SHA="${GITHUB_SHA_REMOTE:0:8}"
-                      IMAGE="ghcr.io/${{ github.repository_owner }}/praccreminder:sha-${SHORT_SHA}"
+                      REPO_OWNER=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+                      IMAGE="ghcr.io/${REPO_OWNER}/praccreminder:sha-${SHORT_SHA}"
                       COMPOSE_FILE="/srv/pracc-reminder/docker-compose.yml"
 
                       echo "Updating docker-compose image for bot -> ${IMAGE}"
-                      sed -i.bak -E "s|(image:[[:space:]]*ghcr.io/${{ github.repository_owner }}/praccreminder:)[^[:space:]]+|\1sha-${SHORT_SHA}|g" "$COMPOSE_FILE"
+                      sed -i.bak -E "s|(image:[[:space:]]*ghcr.io/${REPO_OWNER}/praccreminder:)[^[:space:]]+|\1sha-${SHORT_SHA}|g" "$COMPOSE_FILE"
 
                       cd /srv/pracc-reminder
 
@@ -78,3 +81,4 @@ jobs:
                       docker image prune -f
               env:
                   GITHUB_SHA_REMOTE: ${{ github.sha }}
+                  GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
