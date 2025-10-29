@@ -4,6 +4,7 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import week
 from datetime import datetime
+import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from database import init_db, get_all_users, add_user, remove_user, user_exists
@@ -147,9 +148,10 @@ async def send_reminder(channel_id: Optional[int] = None) -> None:
         await channel.send("Kunne ikke finde regnearket for denne uge.")
         return
     
-    # Get today's day name
-    day_today = datetime.today().strftime("%A")
-    logger.info(f"Checking schedule for: {day_today}")
+    # Get today's day name in Danish timezone
+    denmark_tz = pytz.timezone('Europe/Copenhagen')
+    day_today = datetime.now(denmark_tz).strftime("%A")
+    logger.info(f"Checking schedule for: {day_today} (Danish time)")
     
     try:
         days = worksheet.get("B2:H2")
