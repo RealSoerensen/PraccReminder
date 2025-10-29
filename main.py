@@ -41,7 +41,7 @@ intents.message_content = True
 bot = commands.Bot(
     command_prefix=COMMAND_PREFIX,
     intents=intents,
-    activity=discord.Game("Jeg holder øje med jer! - .help")
+    activity=discord.Game("Jeg holder øje med jer! - .commands")
 )
 logger.info("Discord bot initialized")
 
@@ -308,7 +308,7 @@ async def remove(ctx, user: discord.Member):
     await ctx.send(f"{user.mention} er blevet fjernet fra påmindelseslisten.")
 
 @bot.command()
-async def help(ctx):
+async def commands(ctx):
     """Display help information about bot commands."""
     logger.info(f"Help command invoked by {ctx.author} (ID: {ctx.author.id})")
     help_text = (
@@ -317,10 +317,9 @@ async def help(ctx):
         f"`{COMMAND_PREFIX}add @bruger` - Tilføj en bruger til påmindelseslisten.\n"
         f"`{COMMAND_PREFIX}remove @bruger` - Fjern en bruger fra påmindelseslisten.\n"
         f"`{COMMAND_PREFIX}list` - Vis alle brugere på påmindelseslisten.\n"
-        f"`{COMMAND_PREFIX}help` - Vis denne hjælpetekst."
+        f"`{COMMAND_PREFIX}commands` - Vis denne hjælpetekst."
     )
     await ctx.send(help_text)
-    logger.info("Help information sent successfully")
 
 if __name__ == "__main__":
     logger.info("=== Starting PraccReminder Bot ===")
