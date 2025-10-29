@@ -307,7 +307,7 @@ async def remove(ctx, user: discord.Member):
     logger.info(f"Successfully removed user {user} (ID: {user.id}) from database")
     await ctx.send(f"{user.mention} er blevet fjernet fra påmindelseslisten.")
 
-@bot.commaand()
+@bot.command()
 async def help(ctx):
     """Display help information about bot commands."""
     logger.info(f"Help command invoked by {ctx.author} (ID: {ctx.author.id})")
