@@ -41,7 +41,7 @@ intents.message_content = True
 bot = commands.Bot(
     command_prefix=COMMAND_PREFIX,
     intents=intents,
-    activity=discord.Game("Jeg holder øje med jer!")
+    activity=discord.Game("Jeg holder øje med jer! - .help")
 )
 logger.info("Discord bot initialized")
 
@@ -180,12 +180,13 @@ async def send_reminder(channel_id: Optional[int] = None) -> None:
         time = worksheet.col_values(1)
         logger.debug(f"Retrieved {len(booking)} bookings for today")
         
-        # Find training/officials sessions
+        # Find training/officials sessions with time ranges
         sessions = []
         for i, booking_type in enumerate(booking):
             if booking_type in ["Træning", "Officals"]:
-                sessions.append(f"{time[i]} - {booking_type}")
-                logger.debug(f"Found session: {time[i]} - {booking_type}")
+                time_str = time[i] if i < len(time) else ""
+                sessions.append({"time": time_str, "type": booking_type, "index": i})
+                logger.debug(f"Found session: {time_str} - {booking_type}")
         
         if not sessions:
             logger.info("No training or officials sessions found for today")
@@ -194,20 +195,42 @@ async def send_reminder(channel_id: Optional[int] = None) -> None:
         
         logger.info(f"Found {len(sessions)} session(s) for today")
         
+        # Consolidate consecutive sessions of the same type
+        consolidated = []
+        i = 0
+        while i < len(sessions):
+            current = sessions[i]
+            start_time = current["time"].split("-")[0].strip() if "-" in current["time"] else current["time"]
+            end_time = current["time"].split("-")[1].strip() if "-" in current["time"] else ""
+            session_type = current["type"]
+            
+            # Look ahead for consecutive sessions of the same type
+            j = i + 1
+            while j < len(sessions) and sessions[j]["type"] == session_type and sessions[j]["index"] == sessions[j-1]["index"] + 1:
+                end_time = sessions[j]["time"].split("-")[1].strip() if "-" in sessions[j]["time"] else ""
+                j += 1
+            
+            # Format the consolidated time range
+            if start_time and end_time:
+                consolidated.append(f"Klokken {start_time}-{end_time} - {session_type}")
+            else:
+                consolidated.append(f"{current['time']} - {session_type}")
+            
+            logger.debug(f"Consolidated session: {start_time}-{end_time} - {session_type}")
+            i = j
+        
         # Get users to mention
         users = get_all_users()
         logger.info(f"Notifying {len(users)} user(s)")
-        
+
+        hours = "\n".join(consolidated)
+        message = f"Her er dagens agenda:\n{hours}"
         if users:
             mentions = ", ".join(f"<@{user_id}>" for user_id in users)
-            hours = "\n".join(sessions)
-            await channel.send(f"Husk træning {mentions}\n{hours}")
-            logger.info("Reminder sent successfully with user mentions")
-        else:
-            hours = "\n".join(sessions)
-            await channel.send(f"Træning i dag:\n{hours}")
-            logger.info("Reminder sent successfully (no users to mention)")
-            
+            message += f"\n\n{mentions}"
+
+        await channel.send(message)
+
     except Exception as e:
         logger.error(f"Error sending reminder: {e}", exc_info=True)
         await channel.send("Der opstod en fejl ved hentning af træningsdata.")
@@ -284,6 +307,20 @@ async def remove(ctx, user: discord.Member):
     logger.info(f"Successfully removed user {user} (ID: {user.id}) from database")
     await ctx.send(f"{user.mention} er blevet fjernet fra påmindelseslisten.")
 
+@bot.commaand()
+async def help(ctx):
+    """Display help information about bot commands."""
+    logger.info(f"Help command invoked by {ctx.author} (ID: {ctx.author.id})")
+    help_text = (
+        "Tilgængelige kommandoer:\n"
+        f"`{COMMAND_PREFIX}remind` - Send en påmindelse i den nuværende kanal.\n"
+        f"`{COMMAND_PREFIX}add @bruger` - Tilføj en bruger til påmindelseslisten.\n"
+        f"`{COMMAND_PREFIX}remove @bruger` - Fjern en bruger fra påmindelseslisten.\n"
+        f"`{COMMAND_PREFIX}list` - Vis alle brugere på påmindelseslisten.\n"
+        f"`{COMMAND_PREFIX}help` - Vis denne hjælpetekst."
+    )
+    await ctx.send(help_text)
+    logger.info("Help information sent successfully")
 
 if __name__ == "__main__":
     logger.info("=== Starting PraccReminder Bot ===")
