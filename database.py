@@ -2,11 +2,14 @@ import sqlite3
 from contextlib import contextmanager
 from typing import List
 import logging
+import os
 
 # Setup logging
 logger = logging.getLogger(__name__)
 
-DB_FILE = "reminder.db"
+# Use absolute path for database file
+DB_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_FILE = os.path.join(DB_DIR, "reminder.db")
 
 
 @contextmanager
@@ -22,12 +25,9 @@ def get_db_connection():
 def init_db() -> None:
     """Initialize the SQLite database and create tables if they don't exist."""
     logger.info(f"Initializing database: {DB_FILE}")
-    # Create db if not exists
-    try:
-        open(DB_FILE, 'a').close()
-    except Exception as e:
-        logger.error(f"Error creating database file: {e}", exc_info=True)
-        raise
+    
+    # Ensure the directory exists
+    os.makedirs(DB_DIR, exist_ok=True)
     
     try:
         with get_db_connection() as conn:
