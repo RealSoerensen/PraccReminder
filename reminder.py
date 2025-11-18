@@ -10,14 +10,15 @@ from apscheduler.triggers.cron import CronTrigger
 from config import CHANNEL_ID, COMMAND_PREFIX, SCHEDULER_HOUR, logger
 from database import add_user, get_all_users, remove_user, user_exists, init_db
 from services import ReminderService
-from sheets_schedule import SheetsScheduleProvider
 
 
 def configure_scheduler(bot: discord.Client, reminder_service: ReminderService) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(
-        lambda: send_reminder(bot, reminder_service), CronTrigger(hour=SCHEDULER_HOUR)
-    )
+    
+    async def scheduled_reminder():
+        await send_reminder(bot, reminder_service)
+    
+    scheduler.add_job(scheduled_reminder, CronTrigger(hour=SCHEDULER_HOUR))
     scheduler.start()
     logger.info("Scheduler started - daily reminders at %s:00", SCHEDULER_HOUR)
     return scheduler
