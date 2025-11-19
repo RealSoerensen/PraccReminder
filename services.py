@@ -83,15 +83,5 @@ class ReminderService:
         if users:
             mentions = ", ".join(f"<@{user_id}>" for user_id in users)
             message += f"\n\n{mentions}"
-        
-        # Calculate days until December 12th unban
-        unban_date = datetime(2025, 12, 12, tzinfo=tz)
-        today = datetime.now(tz)
-        days_until_unban = (unban_date.date() - today.date()).days
-        
-        if days_until_unban > 0:
-            message += f"\n\n⏰ {days_until_unban} days till Soerensens unban on faceit"
-        elif days_until_unban == 0:
-            message += "\n\n🎉 Today is Soerensens unban day on faceit!"
 
         await channel.send(message)
