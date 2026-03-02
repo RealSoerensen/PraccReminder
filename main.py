@@ -183,10 +183,11 @@ async def send_reminder(channel_id: Optional[int] = None) -> None:
         # Find training/officials sessions with time ranges
         sessions = []
         for i, booking_type in enumerate(booking):
-            if booking_type in ["Træning", "Officals"]:
-                time_str = time[i] if i < len(time) else ""
-                sessions.append({"time": time_str, "type": booking_type, "index": i})
-                logger.debug(f"Found session: {time_str} - {booking_type}")
+            if booking_type not in ["Træning", "Offical", "Møde", "Faceit"]: continue
+            
+            time_str = time[i] if i < len(time) else ""
+            sessions.append({"time": time_str, "type": booking_type, "index": i})
+            logger.debug(f"Found session: {time_str} - {booking_type}")
         
         if not sessions:
             logger.info("No training or officials sessions found for today")
