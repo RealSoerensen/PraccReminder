@@ -80,6 +80,7 @@ if __name__ == "__main__":
         exit(1)
     
     logger.info("Starting Discord connection...")
+    logger.info(f"Using Spreadsheet ID: {SPREADSHEET_ID}")
     try:
         bot.run(DISCORD_TOKEN)
     except discord.LoginFailure:
