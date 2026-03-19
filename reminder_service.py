@@ -12,18 +12,53 @@ from database import get_all_users
 logger = logging.getLogger(__name__)
 
 
+def _parse_time_range(time_label: str) -> Optional[tuple[str, str]]:
+    """Parse labels like 'Klokken 18-19' into ('18', '19')."""
+    cleaned = time_label.strip()
+    prefix = "Klokken "
+    if not cleaned.startswith(prefix):
+        return None
+
+    hours = cleaned[len(prefix):].strip()
+    if "-" not in hours:
+        return None
+
+    start, end = [part.strip() for part in hours.split("-", 1)]
+    if not start or not end:
+        return None
+    return start, end
+
+
 def _build_consolidated_sessions(booking: List[str], times: List[str]) -> List[str]:
     sessions = []
     for index, booking_type in enumerate(booking):
-        time_str = times[index] if index < len(times) else ""
-        sessions.append({"time": time_str, "type": booking_type, "index": index})
+        booking_value = booking_type.strip()
+        time_str = times[index].strip() if index < len(times) else ""
+        parsed_time = _parse_time_range(time_str)
+
+        # Ignore headers and empty rows; only process actual scheduled slots.
+        if not booking_value or parsed_time is None:
+            continue
+
+        start_time, end_time = parsed_time
+        sessions.append(
+            {
+                "start": start_time,
+                "end": end_time,
+                "type": booking_value,
+                "index": index,
+            }
+        )
+
+    if not sessions:
+        return []
 
     consolidated = []
     position = 0
     while position < len(sessions):
         current = sessions[position]
-        start_time = current["time"].split("-")[0].strip() if "-" in current["time"] else current["time"]
-        end_time = current["time"].split("-")[1].strip() if "-" in current["time"] else ""
+        start_time = current["start"]
+        end_time = current["end"]
         session_type = current["type"]
 
         lookahead = position + 1
@@ -32,13 +67,10 @@ def _build_consolidated_sessions(booking: List[str], times: List[str]) -> List[s
             and sessions[lookahead]["type"] == session_type
             and sessions[lookahead]["index"] == sessions[lookahead - 1]["index"] + 1
         ):
-            end_time = sessions[lookahead]["time"].split("-")[1].strip() if "-" in sessions[lookahead]["time"] else ""
+            end_time = sessions[lookahead]["end"]
             lookahead += 1
 
-        if start_time and end_time:
-            consolidated.append(f"Klokken {start_time}-{end_time} - {session_type}")
-        else:
-            consolidated.append(f"{current['time']} - {session_type}")
+        consolidated.append(f"Klokken {start_time}-{end_time} - {session_type}")
 
         logger.debug(f"Consolidated session: {start_time}-{end_time} - {session_type}")
         position = lookahead
@@ -90,21 +122,18 @@ async def send_reminder(
             await channel.send("Der er ikke noget tilgængeligt i denne uge.")
             return
 
-        logger.debug(f"Days in worksheet: {days[0]}")
+        days_row = [day.strip() for day in days[0]]
+        logger.debug(f"Days in worksheet: {days_row}")
 
-        cell = None
-        for day in days[0]:
-            if day == day_today:
-                cell = worksheet.find(day_today)
-                logger.info(f"Found today's column at position: {cell.col}")
-                break
-
-        if not cell:
+        if day_today not in days_row:
             logger.info(f"Today ({day_today}) not found in schedule")
             await channel.send("Der er ikke noget tilgængeligt i denne uge.")
             return
 
-        booking = worksheet.col_values(cell.col)
+        day_col = 2 + days_row.index(day_today)
+        logger.info(f"Found today's column at position: {day_col}")
+
+        booking = worksheet.col_values(day_col)
         times = worksheet.col_values(1)
         logger.debug(f"Retrieved {len(booking)} bookings for today")
 
