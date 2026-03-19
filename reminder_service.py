@@ -11,30 +11,10 @@ from database import get_all_users
 
 logger = logging.getLogger(__name__)
 
-SESSION_TYPES = {"Træning", "Official", "Møde", "Faceit"}
 
-
-def _get_session_types(worksheet: gspread.Worksheet) -> set[str]:
-    configured_types = worksheet.get("I8:I12")
-    session_types = {
-        row[0].strip()
-        for row in configured_types
-        if row and row[0].strip()
-    }
-
-    if session_types:
-        logger.info(f"Loaded {len(session_types)} session type(s) from worksheet I8:I12: {sorted(session_types)}")
-        return session_types
-
-    logger.warning("No session types found in I8:I12, falling back to default session types")
-    return SESSION_TYPES
-
-
-def _build_consolidated_sessions(booking: List[str], times: List[str], session_types: set[str]) -> List[str]:
+def _build_consolidated_sessions(booking: List[str], times: List[str]) -> List[str]:
     sessions = []
     for index, booking_type in enumerate(booking):
-        if booking_type not in session_types:
-            continue
         time_str = times[index] if index < len(times) else ""
         sessions.append({"time": time_str, "type": booking_type, "index": index})
 
@@ -126,10 +106,9 @@ async def send_reminder(
 
         booking = worksheet.col_values(cell.col)
         times = worksheet.col_values(1)
-        session_types = _get_session_types(worksheet)
         logger.debug(f"Retrieved {len(booking)} bookings for today")
 
-        consolidated = _build_consolidated_sessions(booking, times, session_types)
+        consolidated = _build_consolidated_sessions(booking, times)
         if not consolidated:
             logger.info("No training or officials sessions found for today")
             await channel.send("Der er ikke træning eller officials i dag.")
