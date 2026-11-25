@@ -94,6 +94,13 @@ async def setup_hook():
     await tree.sync()
 
 
+@tree.error
+async def on_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    log.error("Command /%s failed", interaction.command and interaction.command.name, exc_info=error)
+    send = interaction.followup.send if interaction.response.is_done() else interaction.response.send_message
+    await send("Der opstod en fejl ved udførelse af kommandoen.", ephemeral=True)
+
+
 @tree.command(description="Send dagens påmindelse i denne kanal")
 @app_commands.guild_only()
 async def remind(interaction: discord.Interaction):
@@ -103,7 +110,7 @@ async def remind(interaction: discord.Interaction):
 
 @tree.command(description="Tilføj en bruger til påmindelseslisten")
 @app_commands.guild_only()
-async def add(interaction: discord.Interaction, user: discord.Member):
+async def add(interaction: discord.Interaction, user: discord.User):
     with db:
         added = db.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user.id,)).rowcount
     msg = "er blevet tilføjet til påmindelseslisten." if added else "er allerede på listen."
@@ -112,7 +119,7 @@ async def add(interaction: discord.Interaction, user: discord.Member):
 
 @tree.command(description="Fjern en bruger fra påmindelseslisten")
 @app_commands.guild_only()
-async def remove(interaction: discord.Interaction, user: discord.Member):
+async def remove(interaction: discord.Interaction, user: discord.User):
     with db:
         removed = db.execute("DELETE FROM users WHERE user_id = ?", (user.id,)).rowcount
     msg = "er blevet fjernet fra påmindelseslisten." if removed else "er ikke på listen."
