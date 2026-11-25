@@ -1,13 +1,6 @@
-FROM python:3.11-slim
-
+FROM python:3.14-slim
 WORKDIR /app
-
-# Install dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy application files
-COPY . .
-
-# The bot runs continuously, no need for Flask wrapper
-CMD ["python", "main.py"]
+COPY bot.py .
+CMD ["python", "bot.py"]
