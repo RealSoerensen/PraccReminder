@@ -3,7 +3,7 @@ import csv
 import io
 from datetime import date
 
-from bot import todays_sessions
+from bot import day_sessions
 
 # Trimmed copy of the real "uge 48" tab.
 WEEK_48 = """BabyDillars,Team Schedule,,,,,,,Colors
@@ -22,12 +22,12 @@ Klokken 24-01,Sørensen,Sørensen,Sørensen,Sørensen,,,træning,
 TEMPLATE = WEEK_48.split(",23/11")[0].rsplit("\n", 1)[0]  # no date row, like the fallback tab
 rows = lambda s: list(csv.reader(io.StringIO(s)))
 
-assert todays_sessions(rows(WEEK_48), date(2026, 11, 23)) == []
-assert todays_sessions(rows(WEEK_48), date(2026, 11, 24)) == [
+assert day_sessions(rows(WEEK_48), date(2026, 11, 23)) == []
+assert day_sessions(rows(WEEK_48), date(2026, 11, 24)) == [
     "Klokken 17-19 - Official", "Klokken 19-21 - Træning", "Klokken 22-23 - Træning"]
-assert todays_sessions(rows(WEEK_48), date(2026, 11, 25)) == ["Klokken 19-22 - Træning"]
-assert todays_sessions(rows(WEEK_48), date(2026, 11, 26)) == ["Klokken 18-21 - Træning"]
-assert todays_sessions(rows(WEEK_48), date(2026, 11, 29)) == ["Klokken 17-18 - Træning", "Klokken 24-01 - Træning"]
-assert todays_sessions(rows(WEEK_48), date(2027, 11, 24)) is None  # same weekday, wrong date
-assert todays_sessions(rows(TEMPLATE), date(2026, 11, 25)) is None
+assert day_sessions(rows(WEEK_48), date(2026, 11, 25)) == ["Klokken 19-22 - Træning"]
+assert day_sessions(rows(WEEK_48), date(2026, 11, 26)) == ["Klokken 18-21 - Træning"]
+assert day_sessions(rows(WEEK_48), date(2026, 11, 29)) == ["Klokken 17-18 - Træning", "Klokken 24-01 - Træning"]
+assert day_sessions(rows(WEEK_48), date(2027, 11, 24)) is None  # same weekday, wrong date
+assert day_sessions(rows(TEMPLATE), date(2026, 11, 25)) is None
 print("ok")
