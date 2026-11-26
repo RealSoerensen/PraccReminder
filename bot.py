@@ -97,8 +97,8 @@ async def fetch_week(week: int) -> list[list[str]]:
         return list(csv.reader(io.StringIO(await resp.text(encoding="utf-8"))))
 
 
-def card(text: str, ping: bool = False) -> ui.LayoutView:
-    container = ui.Container(ui.TextDisplay(text), accent_colour=discord.Colour.blurple())
+def card(text: str, ping: bool = False, colour: discord.Colour = discord.Colour.blurple()) -> ui.LayoutView:
+    container = ui.Container(ui.TextDisplay(text), accent_colour=colour)
     users = [row[0] for row in db.execute("SELECT user_id FROM users ORDER BY added_at")] if ping else []
     if users:
         container.add_item(ui.Separator())
@@ -109,14 +109,18 @@ def card(text: str, ping: bool = False) -> ui.LayoutView:
 
 
 def reminder_view(day: str, lines: str, changed: bool) -> ui.LayoutView:
-    """lines: today's formatted sessions joined by newlines, "" if there are none."""
+    """lines: today's formatted sessions joined by newlines, "" if there are none.
+    changed: posted because the sheet changed after the daily reminder, shown as an orange "times changed" box."""
+    colour = discord.Colour.orange() if changed else discord.Colour.blurple()
+    header = "### Tiderne for i dag har ændret sig!" if changed else f"### Dagens agenda ({date.fromisoformat(day):%d/%m})"
     if not lines:  # quiet unless it's news that today's sessions were removed
-        return card("**Dagens træning er aflyst.**" if changed else "Der er ikke træning eller officials i dag.", ping=changed)
-    text = f"### Dagens agenda ({date.fromisoformat(day):%d/%m}){' – tiderne er ændret!' if changed else ''}\n{lines}"
+        text = f"{header}\nDer er ikke længere træning eller officials i dag." if changed else "Der er ikke træning eller officials i dag."
+        return card(text, ping=changed, colour=colour)
+    text = f"{header}\n{lines}"
     absent = [uid for (uid,) in db.execute("SELECT user_id FROM checkins WHERE day = ? AND status = 'not-coming'", (day,))]
     if absent:
         text += "\n\n**Kommer ikke:** " + ", ".join(f"<@{u}>" for u in absent)
-    view = card(text, ping=True)
+    view = card(text, ping=True, colour=colour)
     view.add_item(ui.ActionRow(StatusButton("not-coming", day)))
     return view
 
@@ -190,7 +194,7 @@ pending_changes: dict[str, tuple[str, datetime]] = {}  # day -> (new sessions, f
 
 
 async def repost_if_changed(day: str, lines: str, now: datetime) -> None:
-    row = db.execute("SELECT channel_id, sessions FROM reminders WHERE day = ?", (day,)).fetchone()
+    row = db.execute("SELECT channel_id, sessions, message_id FROM reminders WHERE day = ?", (day,)).fetchone()
     if not row or row[1] == lines:  # no reminder yet today (the 10:00 one will be current), or nothing changed
         pending_changes.pop(day, None)
         return
@@ -199,7 +203,12 @@ async def repost_if_changed(day: str, lines: str, now: datetime) -> None:
         pending_changes[day] = (lines, now)
     elif now - since >= CHANGE_SETTLE:
         del pending_changes[day]
-        await send_reminder(bot.get_partial_messageable(row[0]), day, lines, changed=True)
+        channel = bot.get_partial_messageable(row[0])
+        await send_reminder(channel, day, lines, changed=True)  # new box first, so a failed post leaves the old one
+        try:
+            await channel.get_partial_message(row[2]).delete()
+        except discord.HTTPException as e:  # e.g. someone already deleted it by hand
+            log.warning("Could not delete the old reminder for %s: %s", day, e)
 
 
 @tasks.loop(minutes=1)
