@@ -65,21 +65,30 @@ def session_window(day: date, session: Session) -> tuple[datetime, datetime]:
     return midnight + timedelta(hours=start), midnight + timedelta(hours=end + 24 * (end <= start))  # "23-01" ends tomorrow
 
 
-class NotComing(ui.DynamicItem[ui.Button], template=r"not-coming:(?P<day>\d{4}-\d{2}-\d{2})"):
-    """Persistent "Jeg kommer ikke" button; the date lives in the custom_id so it survives restarts."""
+# checkins.status values: the two buttons below, plus "joined" once the bot has seen the user in voice that day.
+STATUS_BUTTONS = {
+    "not-coming": ("Jeg kommer ikke", discord.ButtonStyle.danger, "Noteret – du er meldt fra d. {:%d/%m}."),
+    "on-the-way": ("Jeg er på vej", discord.ButtonStyle.success, "Fedt – du får ikke flere påmindelser d. {:%d/%m}."),
+}
 
-    def __init__(self, day: str):
-        super().__init__(ui.Button(label="Jeg kommer ikke", style=discord.ButtonStyle.danger, custom_id=f"not-coming:{day}"))
-        self.day = day
+
+class StatusButton(ui.DynamicItem[ui.Button], template=r"(?P<status>not-coming|on-the-way):(?P<day>\d{4}-\d{2}-\d{2})"):
+    """Persistent button; status and date live in the custom_id so it keeps working after restarts."""
+
+    def __init__(self, status: str, day: str):
+        label, style, _ = STATUS_BUTTONS[status]
+        super().__init__(ui.Button(label=label, style=style, custom_id=f"{status}:{day}"))
+        self.status, self.day = status, day
 
     @classmethod
     async def from_custom_id(cls, interaction: discord.Interaction, item: ui.Button, match: re.Match[str]):
-        return cls(match["day"])
+        return cls(match["status"], match["day"])
 
     async def callback(self, interaction: discord.Interaction):
-        with db:
-            db.execute("INSERT OR IGNORE INTO absences (user_id, day) VALUES (?, ?)", (interaction.user.id, self.day))
-        await interaction.response.send_message(f"Noteret – du er meldt fra d. {date.fromisoformat(self.day):%d/%m}.", ephemeral=True)
+        with db:  # last button press wins, so "på vej" can undo "kommer ikke" and vice versa
+            db.execute("INSERT OR REPLACE INTO checkins VALUES (?, ?, ?)", (interaction.user.id, self.day, self.status))
+        await interaction.response.send_message(STATUS_BUTTONS[self.status][2].format(date.fromisoformat(self.day)), ephemeral=True)
+        await refresh_reminder(self.day)
 
 
 async def fetch_week(week: int) -> list[list[str]]:
@@ -99,21 +108,42 @@ def card(text: str, ping: bool = False) -> ui.LayoutView:
     return view
 
 
-async def build_reminder() -> ui.LayoutView:
+def reminder_view(day: str, agenda: str) -> ui.LayoutView:
+    absent = [uid for (uid,) in db.execute("SELECT user_id FROM checkins WHERE day = ? AND status = 'not-coming'", (day,))]
+    if absent:
+        agenda += "\n\n**Kommer ikke:** " + ", ".join(f"<@{u}>" for u in absent)
+    view = card(agenda, ping=True)
+    view.add_item(ui.ActionRow(StatusButton("not-coming", day)))
+    return view
+
+
+async def post_reminder(channel: discord.abc.Messageable) -> None:
     today = datetime.now(TZ).date()
     week = today.isocalendar().week
     try:
         sessions = day_sessions(await fetch_week(week), today)
     except Exception:
         log.exception("Failed to read the spreadsheet")
-        return card(FETCH_ERROR)
+        sessions = FETCH_ERROR
     if sessions is None:
-        return card(f"Kunne ikke finde dagens skema i fanen `uge {week}`.")
-    if not sessions:
-        return card("Der er ikke træning eller officials i dag.")
-    view = card(f"### Dagens agenda ({today:%d/%m})\n" + "\n".join(map(fmt, sessions)), ping=True)
-    view.add_item(ui.ActionRow(NotComing(today.isoformat())))
-    return view
+        sessions = f"Kunne ikke finde dagens skema i fanen `uge {week}`."
+    if not sessions or isinstance(sessions, str):
+        await channel.send(view=card(sessions or "Der er ikke træning eller officials i dag."))
+        return
+    day, agenda = today.isoformat(), f"### Dagens agenda ({today:%d/%m})\n" + "\n".join(map(fmt, sessions))
+    msg = await channel.send(view=reminder_view(day, agenda))
+    with db:  # remembered so button presses can update the "Kommer ikke" line
+        db.execute("INSERT OR REPLACE INTO reminders VALUES (?, ?, ?, ?)", (day, msg.channel.id, msg.id, agenda))
+
+
+async def refresh_reminder(day: str) -> None:
+    row = db.execute("SELECT channel_id, message_id, agenda FROM reminders WHERE day = ?", (day,)).fetchone()
+    if not row:
+        return
+    try:
+        await bot.get_partial_messageable(row[0]).get_partial_message(row[1]).edit(view=reminder_view(day, row[2]))
+    except discord.HTTPException:
+        log.exception("Could not update the reminder for %s", day)
 
 
 async def build_week_overview(day: date) -> ui.LayoutView:
@@ -139,7 +169,7 @@ async def reminder_channel() -> discord.abc.Messageable:
 
 @tasks.loop(time=time(hour=REMINDER_HOUR, tzinfo=TZ))
 async def daily_reminder():
-    await (await reminder_channel()).send(view=await build_reminder())
+    await post_reminder(await reminder_channel())
 
 
 @tasks.loop(time=time(hour=0, tzinfo=TZ))
@@ -151,8 +181,9 @@ async def weekly_overview():
 
 @tasks.loop(minutes=1)
 async def nag_absentees():
-    """During a session, DM everyone on the list who isn't in the voice channel and hasn't sent "Jeg kommer ikke"."""
+    """During a session, DM everyone on the list every minute until they join voice or press a button."""
     # ponytail: only today's column, so a session after midnight ("24-01") is never nagged and "23-01" stops at 00:00.
+    # ponytail: check-ins are per day, so joining the first of two separate sessions also silences the second.
     now = datetime.now(TZ)
     today = now.date()
     try:
@@ -167,11 +198,15 @@ async def nag_absentees():
     if not isinstance(voice, discord.VoiceChannel):
         log.warning("Voice channel %s not visible to the bot; skipping DMs", VOICE_CHANNEL_ID)
         return
+    day = today.isoformat()
+    with db:  # once seen in voice, leaving again doesn't restart the DMs; OR IGNORE keeps an earlier button press
+        db.executemany("INSERT OR IGNORE INTO checkins VALUES (?, ?, 'joined')", [(uid, day) for uid in voice.voice_states])
     users = {uid for (uid,) in db.execute("SELECT user_id FROM users")}
-    absent = {uid for (uid,) in db.execute("SELECT user_id FROM absences WHERE day = ?", (today.isoformat(),))}
-    for uid in users - absent - set(voice.voice_states):
+    checked_in = {uid for (uid,) in db.execute("SELECT user_id FROM checkins WHERE day = ?", (day,))}
+    for uid in users - checked_in:
         view = ui.View(timeout=None)
-        view.add_item(NotComing(today.isoformat()))
+        view.add_item(StatusButton("on-the-way", day))
+        view.add_item(StatusButton("not-coming", day))
         try:
             dm = await bot.create_dm(discord.Object(id=uid))
             await dm.send(f"**{fmt(active)}** er startet – hop på {voice.mention}!", view=view)
@@ -190,8 +225,10 @@ async def setup_hook():
     os.makedirs(DB_DIR, exist_ok=True)
     db = sqlite3.connect(os.path.join(DB_DIR, "reminder.db"))
     db.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
-    db.execute("CREATE TABLE IF NOT EXISTS absences (user_id INTEGER, day TEXT, PRIMARY KEY (user_id, day))")
-    bot.add_dynamic_items(NotComing)
+    db.execute("CREATE TABLE IF NOT EXISTS checkins (user_id INTEGER, day TEXT, status TEXT, PRIMARY KEY (user_id, day))")
+    db.execute("CREATE TABLE IF NOT EXISTS reminders (day TEXT PRIMARY KEY, channel_id INTEGER, message_id INTEGER, agenda TEXT)")
+    db.execute("DROP TABLE IF EXISTS absences")  # replaced by checkins
+    bot.add_dynamic_items(StatusButton)
     daily_reminder.start()
     weekly_overview.start()
     nag_absentees.start()
@@ -208,8 +245,9 @@ async def on_command_error(interaction: discord.Interaction, error: app_commands
 @tree.command(description="Send dagens påmindelse i denne kanal")
 @app_commands.guild_only()
 async def remind(interaction: discord.Interaction):
-    await interaction.response.defer(thinking=True)
-    await interaction.followup.send(view=await build_reminder())
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    await post_reminder(interaction.channel)  # a normal bot message, so button presses can edit it later
+    await interaction.followup.send("Påmindelsen er sendt.", ephemeral=True)
 
 
 @tree.command(description="Vis ugens planlagte træninger i denne kanal")
