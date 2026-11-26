@@ -108,13 +108,23 @@ def card(text: str, ping: bool = False) -> ui.LayoutView:
     return view
 
 
-def reminder_view(day: str, agenda: str) -> ui.LayoutView:
+def reminder_view(day: str, lines: str, changed: bool) -> ui.LayoutView:
+    """lines: today's formatted sessions joined by newlines, "" if there are none."""
+    if not lines:  # quiet unless it's news that today's sessions were removed
+        return card("**Dagens træning er aflyst.**" if changed else "Der er ikke træning eller officials i dag.", ping=changed)
+    text = f"### Dagens agenda ({date.fromisoformat(day):%d/%m}){' – tiderne er ændret!' if changed else ''}\n{lines}"
     absent = [uid for (uid,) in db.execute("SELECT user_id FROM checkins WHERE day = ? AND status = 'not-coming'", (day,))]
     if absent:
-        agenda += "\n\n**Kommer ikke:** " + ", ".join(f"<@{u}>" for u in absent)
-    view = card(agenda, ping=True)
+        text += "\n\n**Kommer ikke:** " + ", ".join(f"<@{u}>" for u in absent)
+    view = card(text, ping=True)
     view.add_item(ui.ActionRow(StatusButton("not-coming", day)))
     return view
+
+
+async def send_reminder(channel: discord.abc.Messageable, day: str, lines: str, changed: bool = False) -> None:
+    msg = await channel.send(view=reminder_view(day, lines, changed))
+    with db:  # remembered so button presses can edit it and the minute check can spot schedule changes
+        db.execute("INSERT OR REPLACE INTO reminders VALUES (?, ?, ?, ?, ?)", (day, msg.channel.id, msg.id, lines, changed))
 
 
 async def post_reminder(channel: discord.abc.Messageable) -> None:
@@ -124,24 +134,20 @@ async def post_reminder(channel: discord.abc.Messageable) -> None:
         sessions = day_sessions(await fetch_week(week), today)
     except Exception:
         log.exception("Failed to read the spreadsheet")
-        sessions = FETCH_ERROR
-    if sessions is None:
-        sessions = f"Kunne ikke finde dagens skema i fanen `uge {week}`."
-    if not sessions or isinstance(sessions, str):
-        await channel.send(view=card(sessions or "Der er ikke træning eller officials i dag."))
+        await channel.send(view=card(FETCH_ERROR))
         return
-    day, agenda = today.isoformat(), f"### Dagens agenda ({today:%d/%m})\n" + "\n".join(map(fmt, sessions))
-    msg = await channel.send(view=reminder_view(day, agenda))
-    with db:  # remembered so button presses can update the "Kommer ikke" line
-        db.execute("INSERT OR REPLACE INTO reminders VALUES (?, ?, ?, ?)", (day, msg.channel.id, msg.id, agenda))
+    if sessions is None:
+        await channel.send(view=card(f"Kunne ikke finde dagens skema i fanen `uge {week}`."))
+        return
+    await send_reminder(channel, today.isoformat(), "\n".join(map(fmt, sessions)))
 
 
 async def refresh_reminder(day: str) -> None:
-    row = db.execute("SELECT channel_id, message_id, agenda FROM reminders WHERE day = ?", (day,)).fetchone()
+    row = db.execute("SELECT channel_id, message_id, sessions, changed FROM reminders WHERE day = ?", (day,)).fetchone()
     if not row:
         return
     try:
-        await bot.get_partial_messageable(row[0]).get_partial_message(row[1]).edit(view=reminder_view(day, row[2]))
+        await bot.get_partial_messageable(row[0]).get_partial_message(row[1]).edit(view=reminder_view(day, row[2], bool(row[3])))
     except discord.HTTPException:
         log.exception("Could not update the reminder for %s", day)
 
@@ -179,18 +185,39 @@ async def weekly_overview():
         await (await reminder_channel()).send(view=await build_week_overview(day), silent=True)
 
 
+CHANGE_SETTLE = timedelta(minutes=3)  # a changed schedule must stay put this long, so editing several cells pings once
+pending_changes: dict[str, tuple[str, datetime]] = {}  # day -> (new sessions, first seen)
+
+
+async def repost_if_changed(day: str, lines: str, now: datetime) -> None:
+    row = db.execute("SELECT channel_id, sessions FROM reminders WHERE day = ?", (day,)).fetchone()
+    if not row or row[1] == lines:  # no reminder yet today (the 10:00 one will be current), or nothing changed
+        pending_changes.pop(day, None)
+        return
+    seen, since = pending_changes.get(day, (None, now))
+    if seen != lines:
+        pending_changes[day] = (lines, now)
+    elif now - since >= CHANGE_SETTLE:
+        del pending_changes[day]
+        await send_reminder(bot.get_partial_messageable(row[0]), day, lines, changed=True)
+
+
 @tasks.loop(minutes=1)
-async def nag_absentees():
-    """During a session, DM everyone on the list every minute until they join voice or press a button."""
+async def every_minute():
+    """Repost the reminder if today's times changed, and during a session DM everyone on the list every minute
+    until they join voice or press a button."""
     # ponytail: only today's column, so a session after midnight ("24-01") is never nagged and "23-01" stops at 00:00.
     # ponytail: check-ins are per day, so joining the first of two separate sessions also silences the second.
     now = datetime.now(TZ)
     today = now.date()
     try:
-        sessions = day_sessions(await fetch_week(today.isocalendar().week), today) or []
+        sessions = day_sessions(await fetch_week(today.isocalendar().week), today)
     except Exception:
         log.exception("Failed to read the spreadsheet")
         return
+    if sessions is None:  # this week's tab is missing
+        return
+    await repost_if_changed(today.isoformat(), "\n".join(map(fmt, sessions)), now)
     active = next((s for s in sessions if session_window(today, s)[0] <= now < session_window(today, s)[1]), None)
     if not active:
         return
@@ -214,7 +241,7 @@ async def nag_absentees():
             log.warning("Could not DM %s: %s", uid, e)
 
 
-@nag_absentees.before_loop
+@every_minute.before_loop
 async def wait_for_cache():
     await bot.wait_until_ready()  # voice states are only known once the guild cache is loaded
 
@@ -226,12 +253,12 @@ async def setup_hook():
     db = sqlite3.connect(os.path.join(DB_DIR, "reminder.db"))
     db.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
     db.execute("CREATE TABLE IF NOT EXISTS checkins (user_id INTEGER, day TEXT, status TEXT, PRIMARY KEY (user_id, day))")
-    db.execute("CREATE TABLE IF NOT EXISTS reminders (day TEXT PRIMARY KEY, channel_id INTEGER, message_id INTEGER, agenda TEXT)")
+    db.execute("CREATE TABLE IF NOT EXISTS reminders (day TEXT PRIMARY KEY, channel_id INTEGER, message_id INTEGER, sessions TEXT, changed INTEGER)")
     db.execute("DROP TABLE IF EXISTS absences")  # replaced by checkins
     bot.add_dynamic_items(StatusButton)
     daily_reminder.start()
     weekly_overview.start()
-    nag_absentees.start()
+    every_minute.start()
     await tree.sync()
 
 
